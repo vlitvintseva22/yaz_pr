@@ -9,11 +9,15 @@
 scale_y выполняет отражение: y_screen = -y_model + cy.
 """
 
+import collections
+
 window_width  = 1000
 window_height = 800
 
 _cx = window_width  // 2    # x-координата центра холста
 _cy = window_height // 2    # y-координата центра холста
+
+TRAIL_MAX = 140             # макс. сегментов следа на одну планету
 
 
 # ─── Преобразование координат ──────────────────────────────────────────
@@ -53,6 +57,49 @@ def toggle_orbits(space, show: bool):
     """Переключает видимость орбит (теговое управление)."""
     state = "normal" if show else "hidden"
     space.itemconfigure("orbit", state=state)
+
+
+# ─── След от движения планет ───────────────────────────────────────────
+
+def add_trail_segment(space, body):
+    """
+    Дорисовывает к следу планеты отрезок от её прошлой позиции к текущей.
+    Сам след — это история движения; орбита «рисуется» планетой на лету.
+
+    Длина следа ограничена TRAIL_MAX: самые старые сегменты удаляются,
+    поэтому за планетой тянется «хвост», а не бесконечная линия.
+    Состояние (хвост-очередь и прошлая позиция) хранится на самом объекте.
+    """
+    if not hasattr(body, "_trail"):
+        # первый кадр: запоминаем позицию, рисовать пока нечего
+        body._trail = collections.deque()
+        body._tx, body._ty = body.x, body.y
+        return
+
+    x0, y0 = scale_x(body._tx), scale_y(body._ty)
+    x1, y1 = scale_x(body.x),   scale_y(body.y)
+    body._tx, body._ty = body.x, body.y
+
+    seg = space.create_line(x0, y0, x1, y1,
+                            fill=body.color, width=1, tags="trail")
+    space.tag_lower(seg)                 # след — под планетами и звёздами
+    body._trail.append(seg)
+    if len(body._trail) > TRAIL_MAX:
+        space.delete(body._trail.popleft())
+
+
+def clear_trail(space, body):
+    """Удаляет с холста весь след тела (например, когда планета исчезла)."""
+    for seg in getattr(body, "_trail", ()):
+        space.delete(seg)
+    if hasattr(body, "_trail"):
+        body._trail.clear()
+
+
+def toggle_trails(space, show: bool):
+    """Переключает видимость следов (теговое управление)."""
+    state = "normal" if show else "hidden"
+    space.itemconfigure("trail", state=state)
 
 
 # ─── Создание графических объектов ─────────────────────────────────────

@@ -27,12 +27,12 @@ import math
 import os
 
 from solar_objects import Star, Planet, Satellite
-from solar_model  import recalculate_positions
+from solar_model  import recalculate_positions, G
 from solar_input  import (read_space_objects_data_from_file,
                           write_space_objects_data_to_file)
 from solar_vis    import (
     window_width, window_height,
-    draw_all_orbits, toggle_orbits,
+    add_trail_segment, clear_trail, toggle_trails,
     create_star_image, create_star_label,
     create_planet_image, create_satellite_image,
     update_object_position,
@@ -46,11 +46,16 @@ from solar_vis    import (
 ORBIT_BASE    = 30      # радиус первой орбиты (пикс.)
 ORBIT_STEP    = 25      # шаг между орбитами (пикс.)
 MAX_PER_ORBIT = 3       # максимум планет на одной орбите
-SAT_ORBIT_R   = 20      # радиус орбиты спутника вокруг планеты (пикс.)
+SAT_ORBIT_R   = 10      # радиус орбиты спутника (мал — внутри сферы Хилла,
+                        # чтобы спутник как настоящее тело не улетал)
+SAT_RADIUS    = 2       # визуальный размер спутника (пикс.)
 
-STAR_MASS     = 100.0   # масса каждой звезды (нормализованные единицы, G=1)
-PLANET_MASS   = 5.0     # масса планеты (нужна спутникам)
-SAT_MASS      = 0.1     # масса спутника (пренебрежимо мала)
+# Массы выбраны так, чтобы G*M совпадало со старыми значениями (100/5/0.1
+# при G=1) — орбиты и скорости визуально не меняются, просто G теперь
+# настоящая гравитационная постоянная, а не выдуманная "1".
+STAR_MASS     = 100.0 / G   # ≈ 1.498e12 кг
+PLANET_MASS   = 5.0   / G   # ≈ 7.49e10  кг
+SAT_MASS      = 0.1   / G   # ≈ 1.498e9  кг
 
 # Файл конфигурации системы
 SOLAR_FILE = "solar_system.txt"
@@ -165,7 +170,7 @@ def create_solar_system():
                         # 0 и π рад — спутники всегда по разные стороны
                         sat_phase = math.pi * sat_k
                         sat = Satellite(p, SAT_ORBIT_R, sat_phase,
-                                        mass=SAT_MASS)
+                                        mass=SAT_MASS, R=SAT_RADIUS)
 
                         # Скорость в инерциальной СО =
                         #   скорость планеты + скорость по орбите вокруг планеты
@@ -186,7 +191,7 @@ def create_solar_system():
 
 perform_execution: bool  = False
 physical_time:     float = 0.0
-show_orbits:       bool  = True
+show_trails:       bool  = True
 
 stars:      list = []
 planets:    list = []
@@ -209,9 +214,23 @@ def execution():
     global physical_time
 
     dt = time_step.get()
-    recalculate_positions(planets, satellites, dt)
+    # Удалённые за шаг тела (слияние планет + падение на звёзды)
+    removed_planets, removed_sats = recalculate_positions(
+        planets, satellites, stars, dt)
+    for victim in removed_planets:
+        if victim.image is not None:
+            space.delete(victim.image)
+        clear_trail(space, victim)       # стираем и его след
+    for sat in removed_sats:
+        if sat.image is not None:
+            space.delete(sat.image)
+
+    # Звёзды могли подрасти, поглотив планеты — обновляем их размер
+    for star in stars:
+        update_object_position(space, star)
 
     for p in planets:
+        add_trail_segment(space, p)      # планета «дорисовывает» свою орбиту
         update_object_position(space, p)
     for sat in satellites:
         update_object_position(space, sat)
@@ -238,13 +257,13 @@ def stop_execution():
     start_button.config(text="Старт", command=start_execution)
 
 
-def toggle_orbit_display():
-    """Переключает отображение орбит и обновляет текст кнопки."""
-    global show_orbits
-    show_orbits = not show_orbits
-    toggle_orbits(space, show_orbits)
+def toggle_trail_display():
+    """Переключает отображение следов и обновляет текст кнопки."""
+    global show_trails
+    show_trails = not show_trails
+    toggle_trails(space, show_trails)
     orbit_button.config(
-        text="Скрыть орбиты" if show_orbits else "Показать орбиты"
+        text="Скрыть след" if show_trails else "Показать след"
     )
 
 
@@ -253,12 +272,12 @@ def toggle_orbit_display():
 # ═══════════════════════════════════════════════════════════════════
 
 def main():
-    global physical_time, show_orbits
+    global physical_time, show_trails
     global stars, planets, satellites
     global space, start_button, orbit_button, displayed_time, time_step, time_speed
 
     physical_time = 0.0
-    show_orbits   = True
+    show_trails   = True
 
     # ── Загружаем систему из файла или генерируем дефолт ───────────
     if os.path.exists(SOLAR_FILE):
@@ -282,8 +301,8 @@ def main():
     space.pack(side=tkinter.TOP)
 
     # ── Порядок отрисовки (нижние слои сначала) ─────────────────────
-    # 1) Орбиты — самый нижний слой
-    draw_all_orbits(space, stars)
+    # 1) Следы планет рисуются на лету в execution() и всегда уходят
+    #    в самый нижний слой (tag_lower) — статичные орбиты больше не нужны.
 
     # 2) Звёзды + подписи
     for star in stars:
@@ -338,9 +357,9 @@ def main():
                   troughcolor="#1e3a5f", highlightthickness=0
                   ).pack(side=tkinter.LEFT)
 
-    # Кнопка орбит
+    # Кнопка следов
     orbit_button = tkinter.Button(
-        ctrl, text="Скрыть орбиты", command=toggle_orbit_display,
+        ctrl, text="Скрыть след", command=toggle_trail_display,
         width=15, bg="#1e3a5f", fg="white", relief=tkinter.FLAT
     )
     orbit_button.pack(side=tkinter.LEFT, padx=10)
