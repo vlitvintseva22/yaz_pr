@@ -1,115 +1,121 @@
 # coding: utf-8
 # license: GPLv3
 
-"""Модуль визуализации.
-Нигде, кроме этого модуля, не используются экранные координаты объектов.
-Функции, создающие гaрафические объекты и перемещающие их на экране, принимают физические координаты
+"""
+Модуль визуализации.
+
+Все экранные координаты вычисляются здесь.
+Физическая ось Y направлена вверх; на экране — вниз, поэтому
+scale_y выполняет отражение: y_screen = -y_model + cy.
 """
 
-header_font = "Arial-16"
-"""Шрифт в заголовке"""
-
-window_width = 800
-"""Ширина окна"""
-
+window_width  = 1000
 window_height = 800
-"""Высота окна"""
 
-scale_factor = None
-"""Масштабирование экранных координат по отношению к физическим.
-Тип: float
-Мера: количество пикселей на один метр."""
+_cx = window_width  // 2    # x-координата центра холста
+_cy = window_height // 2    # y-координата центра холста
 
 
-def calculate_scale_factor(max_distance):
-    """Вычисляет значение глобальной переменной **scale_factor** по данной характерной длине"""
-    global scale_factor
-    scale_factor = 0.4*min(window_height, window_width)/max_distance
-    print('Scale factor:', scale_factor)
-
+# ─── Преобразование координат ──────────────────────────────────────────
 
 def scale_x(x):
-    """Возвращает экранную **x** координату по **x** координате модели.
-    Принимает вещественное число, возвращает целое число.
-    В случае выхода **x** координаты за пределы экрана возвращает
-    координату, лежащую за пределами холста.
-
-    Параметры:
-
-    **x** — x-координата модели.
-    """
-
-    return int(x*scale_factor) + window_width//2
+    """Физическая x → экранная x."""
+    return int(x) + _cx
 
 
 def scale_y(y):
-    """Возвращает экранную **y** координату по **y** координате модели.
-    Принимает вещественное число, возвращает целое число.
-    В случае выхода **y** координаты за пределы экрана возвращает
-    координату, лежащую за пределами холста.
-    Направление оси развёрнуто, чтобы у модели ось **y** смотрела вверх.
+    """Физическая y → экранная y (ось Y направлена вверх)."""
+    return -int(y) + _cy
 
-    Параметры:
 
-    **y** — y-координата модели.
+# ─── Орбиты ────────────────────────────────────────────────────────────
+
+def draw_all_orbits(space, stars):
     """
+    Рисует окружности орбит для каждой звезды.
+    Все орбиты имеют тег "orbit" — можно скрывать/показывать через toggle_orbits().
+    """
+    space.delete("orbit")
+    for star in stars:
+        cx = scale_x(star.x)
+        cy = scale_y(star.y)
+        for r in star.orbit_radii:
+            space.create_oval(
+                cx - r, cy - r, cx + r, cy + r,
+                outline="#3a3a6a",
+                width=1,
+                dash=(3, 6),
+                tags="orbit"
+            )
 
-    return y  # FIXME: not done yet
 
+def toggle_orbits(space, show: bool):
+    """Переключает видимость орбит (теговое управление)."""
+    state = "normal" if show else "hidden"
+    space.itemconfigure("orbit", state=state)
+
+
+# ─── Создание графических объектов ─────────────────────────────────────
 
 def create_star_image(space, star):
-    """Создаёт отображаемый объект звезды.
+    """Рисует звезду — яркий круг с оранжевой обводкой."""
+    x, y, r = scale_x(star.x), scale_y(star.y), star.R
+    star.image = space.create_oval(
+        x - r, y - r, x + r, y + r,
+        fill=star.color, outline="orange", width=2
+    )
 
-    Параметры:
 
-    **space** — холст для рисования.
-    **star** — объект звезды.
-    """
-
+def create_star_label(space, star):
+    """Подписывает звезду её именем над кружком."""
     x = scale_x(star.x)
-    y = scale_y(star.y)
-    r = star.R
-    star.image = space.create_oval([x - r, y - r], [x + r, y + r], fill=star.color)
+    y = scale_y(star.y) - star.R - 10
+    space.create_text(x, y, text=star.label, fill="white",
+                      font=("Arial", 9, "bold"))
 
 
 def create_planet_image(space, planet):
-    """Создаёт отображаемый объект планеты.
-
-    Параметры:
-
-    **space** — холст для рисования.
-    **planet** — объект планеты.
-    """
-    pass  # FIXME: сделать как у звезды
+    """Рисует планету — закрашенный круг без обводки."""
+    x, y, r = scale_x(planet.x), scale_y(planet.y), planet.R
+    planet.image = space.create_oval(
+        x - r, y - r, x + r, y + r,
+        fill=planet.color, outline=""
+    )
 
 
-def update_system_name(space, system_name):
-    """Создаёт на холсте текст с названием системы небесных тел.
-    Если текст уже был, обновляет его содержание.
+def create_satellite_image(space, sat):
+    """Рисует спутник — маленький белый кружок."""
+    x, y, r = scale_x(sat.x), scale_y(sat.y), sat.R
+    sat.image = space.create_oval(
+        x - r, y - r, x + r, y + r,
+        fill=sat.color, outline=""
+    )
 
-    Параметры:
 
-    **space** — холст для рисования.
-    **system_name** — название системы тел.
-    """
-    space.create_text(30, 80, tag="header", text=system_name, font=header_font)
-
+# ─── Обновление позиций на экране ──────────────────────────────────────
 
 def update_object_position(space, body):
-    """Перемещает отображаемый объект на холсте.
-
-    Параметры:
-
-    **space** — холст для рисования.
-    **body** — тело, которое нужно переместить.
-    """
-    x = scale_x(body.x)
-    y = scale_y(body.y)
-    r = body.R
-    if x + r < 0 or x - r > window_width or y + r < 0 or y - r > window_height:
-        space.coords(body.image, window_width + r, window_height + r,
-                     window_width + 2*r, window_height + 2*r)  # положить за пределы окна
+    """Перемещает уже существующий овал на холсте к новым координатам тела."""
+    x, y, r = scale_x(body.x), scale_y(body.y), body.R
     space.coords(body.image, x - r, y - r, x + r, y + r)
+
+
+# ─── Легенда ───────────────────────────────────────────────────────────
+
+def create_legend(space, star_configs):
+    """
+    Рисует в левом верхнем углу легенду:
+    цветная точка + название звезды + количество планет.
+    """
+    x0, y0 = 12, 12
+    for label, pcolor, n_pl in star_configs:
+        space.create_oval(x0, y0, x0 + 10, y0 + 10,
+                          fill=pcolor, outline="")
+        space.create_text(x0 + 15, y0 + 5,
+                          text=f"{label}: {n_pl} планет",
+                          fill="#cccccc", anchor="w",
+                          font=("Arial", 9))
+        y0 += 18
 
 
 if __name__ == "__main__":
