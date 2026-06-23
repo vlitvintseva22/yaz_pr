@@ -1,82 +1,75 @@
 # coding: utf-8
 # license: GPLv3
 
+"""Классы космических объектов для симуляции Солнечной системы."""
+
+import math
+
 
 class Star:
-    """Тип данных, описывающий звезду.
-    Содержит массу, координаты, скорость звезды,
-    а также визуальный радиус звезды в пикселах и её цвет.
-    """
-
+    """Звезда — неподвижный центр системы."""
     type = "star"
-    """Признак объекта звезды"""
 
-    m = 0
-    """Масса звезды"""
-
-    x = 0
-    """Координата по оси **x**"""
-
-    y = 0
-    """Координата по оси **y**"""
-
-    Vx = 0
-    """Скорость по оси **x**"""
-
-    Vy = 0
-    """Скорость по оси **y**"""
-
-    Fx = 0
-    """Сила по оси **x**"""
-
-    Fy = 0
-    """Сила по оси **y**"""
-
-    R = 5
-    """Радиус звезды"""
-
-    color = "red"
-    """Цвет звезды"""
-
-    image = None
-    """Изображение звезды"""
+    def __init__(self, x, y, color="yellow", R=13, label="", mass=100.0):
+        self.x = x
+        self.y = y
+        self.color = color
+        self.R = R
+        self.label = label
+        self.mass = mass            # масса звезды (нормализованные единицы)
+        self.image = None
+        self.orbit_radii = []       # радиусы орбит планет этой звезды
 
 
 class Planet:
-    """Тип данных, описывающий планету.
-    Содержит массу, координаты, скорость планеты,
-    а также визуальный радиус планеты в пикселах и её цвет
-    """
-
+    """Планета, движущаяся под действием гравитации своей звезды."""
     type = "planet"
-    """Признак объекта планеты"""
 
-    m = 0
-    """Масса планеты"""
+    def __init__(self, star, orbit_radius, angle0, color="#00FF80", R=6, mass=5.0):
+        """
+        star          — родительская звезда
+        orbit_radius  — начальный радиус орбиты (пикс.)
+        angle0        — начальный угол (рад.)
+        mass          — масса планеты (нужна спутникам)
+        vx, vy задаются снаружи сразу после создания
+        """
+        self.star = star
+        self.orbit_radius = orbit_radius   # хранится для отрисовки орбит
+        self.angle = angle0
+        self.mass = mass
+        self.color = color
+        self.R = R
+        self.x = star.x + orbit_radius * math.cos(angle0)
+        self.y = star.y + orbit_radius * math.sin(angle0)
+        self.vx = 0.0
+        self.vy = 0.0
+        self.image = None
+        self.satellites = []        # список спутников этой планеты
 
-    x = 0
-    """Координата по оси **x**"""
 
-    y = 0
-    """Координата по оси **y**"""
+class Satellite:
+    """Спутник, движущийся под действием гравитации своей планеты."""
+    type = "satellite"
 
-    Vx = 0
-    """Скорость по оси **x**"""
+    def __init__(self, planet, orbit_radius, angle0, color="white", R=3, mass=0.1):
+        """
+        planet        — родительская планета
+        orbit_radius  — начальный радиус орбиты (пикс.)
+        angle0        — начальный угол (рад.)
+        vx, vy задаются снаружи сразу после создания
+        """
+        self.planet = planet
+        self.orbit_radius = orbit_radius
+        self.angle = angle0
+        self.mass = mass
+        self.color = color
+        self.R = R
+        self.x = planet.x + orbit_radius * math.cos(angle0)
+        self.y = planet.y + orbit_radius * math.sin(angle0)
+        self.vx = 0.0
+        self.vy = 0.0
+        self.image = None
 
-    Vy = 0
-    """Скорость по оси **y**"""
 
-    Fx = 0
-    """Сила по оси **x**"""
-
-    Fy = 0
-    """Сила по оси **y**"""
-
-    R = 5
-    """Радиус планеты"""
-
-    color = "green"
-    """Цвет планеты"""
-
-    image = None
-    """Изображение планеты"""
+if __name__ == "__main__":
+    print("This module is not for direct call!")

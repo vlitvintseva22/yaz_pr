@@ -1,26 +1,93 @@
-# Солнечная система
-Star 2 red 1.98892E30 0 0 0 0
+# Солнечная система — конфигурационный файл
+# Формат:
+#   Star   x  y  mass  color  R  label
+#   Planet star_idx  orbit_r  angle_deg  color  R  mass
+#   Satellite  planet_idx  orbit_r  angle_deg  color  R  mass
+#
+# angle_deg — начальный угол в градусах
+# Скорости пересчитываются при загрузке: v = sqrt(G*M/r)
 
-# Меркурий
-Planet 2 orange 3.302E23 57.909E9 0 0 47.87E3
+Star  -110  90  100.0  #FFD700  13  Звезда_1
+Star  110  90  100.0  #AAD4FF  13  Звезда_2
+Star  -80  -90  100.0  #FFA040  13  Звезда_3
+Star  80  -90  100.0  #FFFFFF  13  Звезда_4
 
-# Венера
-Planet 5 blue 4.869E24 108.21E9 0 0 35.02E3
+Planet  0  30  0.0000  #00FF80  6  5.0
+Planet  0  30  120.0000  #00FF80  6  5.0
+Planet  0  30  240.0000  #00FF80  6  5.0
+Planet  0  55  45.8366  #00FF80  6  5.0
+Planet  0  55  165.8366  #00FF80  6  5.0
+Planet  0  55  285.8366  #00FF80  6  5.0
+Planet  0  80  91.6732  #00FF80  6  5.0
+Planet  0  80  211.6732  #00FF80  6  5.0
+Planet  0  80  331.6732  #00FF80  6  5.0
+Planet  0  105  137.5099  #00FF80  6  5.0
+Planet  1  30  45.0000  #00AAFF  6  5.0
+Planet  1  30  165.0000  #00AAFF  6  5.0
+Planet  1  30  285.0000  #00AAFF  6  5.0
+Planet  1  55  90.8366  #00AAFF  6  5.0
+Planet  1  55  210.8366  #00AAFF  6  5.0
+Planet  1  55  330.8366  #00AAFF  6  5.0
+Planet  1  80  136.6732  #00AAFF  6  5.0
+Planet  1  80  256.6732  #00AAFF  6  5.0
+Planet  1  80  16.6732  #00AAFF  6  5.0
+Planet  1  105  182.5099  #00AAFF  6  5.0
+Planet  1  105  302.5099  #00AAFF  6  5.0
+Planet  1  105  62.5099  #00AAFF  6  5.0
+Planet  1  130  228.3465  #00AAFF  6  5.0
+Planet  1  130  348.3465  #00AAFF  6  5.0
+Planet  1  130  108.3465  #00AAFF  6  5.0
+Planet  2  30  90.0000  #FF8800  6  5.0
+Planet  2  30  210.0000  #FF8800  6  5.0
+Planet  2  30  330.0000  #FF8800  6  5.0
+Planet  2  55  135.8366  #FF8800  6  5.0
+Planet  2  55  255.8366  #FF8800  6  5.0
+Planet  2  55  15.8366  #FF8800  6  5.0
+Planet  2  80  181.6732  #FF8800  6  5.0
+Planet  2  80  301.6732  #FF8800  6  5.0
+Planet  2  80  61.6732  #FF8800  6  5.0
+Planet  2  105  227.5099  #FF8800  6  5.0
+Planet  2  105  347.5099  #FF8800  6  5.0
+Planet  2  105  107.5099  #FF8800  6  5.0
+Planet  2  130  273.3465  #FF8800  6  5.0
+Planet  2  130  33.3465  #FF8800  6  5.0
+Planet  2  130  153.3465  #FF8800  6  5.0
+Planet  2  155  319.1831  #FF8800  6  5.0
+Planet  2  155  79.1831  #FF8800  6  5.0
+Planet  2  155  199.1831  #FF8800  6  5.0
+Planet  2  180  5.0197  #FF8800  6  5.0
+Planet  2  180  185.0197  #FF8800  6  5.0
+Planet  3  30  135.0000  #FF44FF  6  5.0
+Planet  3  30  255.0000  #FF44FF  6  5.0
+Planet  3  30  15.0000  #FF44FF  6  5.0
+Planet  3  55  180.8366  #FF44FF  6  5.0
+Planet  3  55  300.8366  #FF44FF  6  5.0
+Planet  3  55  60.8366  #FF44FF  6  5.0
+Planet  3  80  226.6732  #FF44FF  6  5.0
+Planet  3  80  346.6732  #FF44FF  6  5.0
+Planet  3  80  106.6732  #FF44FF  6  5.0
+Planet  3  105  272.5099  #FF44FF  6  5.0
+Planet  3  105  32.5099  #FF44FF  6  5.0
+Planet  3  105  152.5099  #FF44FF  6  5.0
+Planet  3  130  318.3465  #FF44FF  6  5.0
+Planet  3  130  78.3465  #FF44FF  6  5.0
+Planet  3  130  198.3465  #FF44FF  6  5.0
+Planet  3  155  4.1831  #FF44FF  6  5.0
+Planet  3  155  124.1831  #FF44FF  6  5.0
+Planet  3  155  244.1831  #FF44FF  6  5.0
+Planet  3  180  50.0197  #FF44FF  6  5.0
+Planet  3  180  170.0197  #FF44FF  6  5.0
+Planet  3  180  290.0197  #FF44FF  6  5.0
+Planet  3  205  95.8564  #FF44FF  6  5.0
+Planet  3  205  215.8564  #FF44FF  6  5.0
+Planet  3  205  335.8564  #FF44FF  6  5.0
+Planet  3  230  141.6930  #FF44FF  6  5.0
 
-# Земля
-Planet 5 green 5.974E24 149.60E9 0 0 29.76E3
-
-#Марс
-Planet 3 red 6.419E23 227.94E9 0 0 24.13E3
-
-# Юпитер
-Planet 20 yellow 1.899E27 778.41E9 0 0 13.07E3
-
-# Сатурн
-Planet 15 white 5.685E26 1429.4E9 0 0 9.67E3
-
-# Уран
-#Planet 8 gray 8.685E25 2871.0E9 0 0 6.84E3
-
-# Нептун
-#Planet 7 blue 1.024E26 4498.3E9 0 0 5.48E3
+Satellite  22  20  0.0000  white  3  0.1
+Satellite  22  20  180.0000  white  3  0.1
+Satellite  23  20  0.0000  white  3  0.1
+Satellite  23  20  180.0000  white  3  0.1
+Satellite  24  20  0.0000  white  3  0.1
+Satellite  24  20  180.0000  white  3  0.1
+Satellite  69  20  0.0000  white  3  0.1
+Satellite  69  20  180.0000  white  3  0.1
