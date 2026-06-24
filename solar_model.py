@@ -2,268 +2,261 @@
 # license: GPLv3
 
 """
-Физическая модель движения: закон тяготения Ньютона.
+Модель всей системы.
 
-  F = G * M * m / r²   (направлена к центру притяжения)
+Класс Simulation хранит все тела (звёзды, планеты, спутники) и временем
+управляет одним методом step(dt). Внутри одного шага:
 
-Интегрирование: Эйлер-Крёмер (полунеявный / симплектический Эйлер).
-  1. a  = F/m = G*M/r²  (в направлении к центру)
-  2. v += a * dt         (скорость обновляется ПЕРВОЙ)
-  3. x += v * dt         (позиция — по НОВОЙ скорости)
+  1) каждая планета делает свой шаг движения      (Planet.step)
+  2) касающиеся планеты сливаются                  (_merge_planets)
+  3) планеты, упавшие на звезду, поглощаются ею    (_absorb_into_stars)
+  4) каждый спутник делает свой шаг                 (Satellite.step)
 
-Симплектичность сохраняет фазовый объём → орбиты не расходятся
-(в отличие от явного Эйлера, который их «раскручивает»).
+Сама физика движения и слияния — в методах тел (solar_objects). Здесь
+только «оркестровка»: кто за кем ходит и что удалить.
 
-Планета чувствует гравитацию ТОЛЬКО своей звезды.
-Спутник — ПОЛНОЦЕННОЕ физическое тело в инерциальной СО: чувствует
-гравитацию и своей планеты, и звезды этой планеты (см. ниже).
+Орбиты ВСЕХ пар звёзд пересекаются (звёзды стоят кучно, см.
+build_default_system), но планеты НЕ сталкиваются (по заданию): по
+умолчанию interactions=False и планеты спокойно проходят сквозь точки
+пересечения орбит. Флаг interactions=True — необязательный режим, в
+котором планеты начинают сталкиваться, сливаться и падать на звёзды.
 
-СТОЛКНОВЕНИЯ ПЛАНЕТ = СЛИЯНИЕ (не отскок, не проход насквозь).
-Орбиты четырёх звёзд пересекаются по построению. Когда две планеты
-касаются (расстояние < R₁ + R₂), они СЛИПАЮТСЯ в одно тело: масса
-складывается, скорость — по закону сохранения импульса (неупругий удар),
-позиция — центр масс, радиус — из сохранения площади R=√(R₁²+R₂²).
-Слившееся тело движется дальше по той орбите, что даёт сохранение
-импульса (обычно эксцентричной/хаотичной — это честная физика, орбиты
-НЕ выравниваются искусственно). Спутники поглощённой планеты переходят
-к выжившему телу без подгонки скорости; если орбита нового тела
-хаотична, луну может реалистично сорвать. См. _merge_planets().
-
-Про «физичность» спутников: чтобы спутник был настоящим телом и при этом
-не улетал, его орбита должна лежать ГЛУБОКО внутри сферы Хилла планеты.
-При радиусе 20 (≈0.6 R_Hill) звёздные приливные силы раскачивают орбиту
-и спутник улетает; при радиусе ~10 (≈0.3 R_Hill) орбита устойчива на
-десятки тысяч шагов. Поэтому радиус орбиты спутника уменьшен (SAT_ORBIT_R
-в solar_main.py), и спутник честно интегрируется в инерциальной СО.
+Функция build_default_system() собирает систему из 4 звёзд по умолчанию.
 """
 
 import math
 
-# ═══════════════════════════════════════════════════════════
-#  ГРАВИТАЦИОННАЯ ПОСТОЯННАЯ — настоящее значение, м³·кг⁻¹·с⁻²
-#
-#  Раньше тут стояло G = 1.0 — это значит масса звезды "100"
-#  была не массой, а просто числом G*M. Теперь G настоящая,
-#  а массы (STAR_MASS / PLANET_MASS / SAT_MASS в solar_main.py)
-#  отмасштабированы делением на G, так что произведение G*M
-#  (а значит и все скорости/орбиты) не изменилось — динамика
-#  та же самая, просто G явно физический, а не "1".
-# ═══════════════════════════════════════════════════════════
-G = 6.674e-11
+from solar_objects import Star, Planet, Satellite, G
 
 
-# ═══════════════════════════════════════════════════════════
-#  ПОДШАГИ ДЛЯ СПУТНИКОВ
-#
-#  Спутник летает по маленькому радиусу вокруг ПОДВИЖНОЙ планеты —
-#  угол на его орбите меняется намного быстрее, чем у планеты вокруг
-#  звезды. Чтобы шаг интегрирования был достаточно мелким (и чтобы
-#  настоящая инерциальная орбита спутника не «плыла»), за один кадр
-#  спутник проходит N маленьких подшагов dt/N. Позиция планеты при
-#  этом линейно интерполируется между её старым и новым положением —
-#  так спутник чувствует согласованно движущуюся планету и пару
-#  «планета+спутник» не растаскивает.
-# ═══════════════════════════════════════════════════════════
-SATELLITE_SUBSTEPS = 20
+# ═══════════════════════════════════════════════════════════════════
+#  КЛАСС СИМУЛЯЦИИ
+# ═══════════════════════════════════════════════════════════════════
 
+class Simulation:
+    """Содержит все тела и продвигает их во времени."""
 
-def _gravity_acceleration(ax_body, ay_body, bx_center, by_center, M_center):
-    """
-    Возвращает (ax, ay) — ускорение тела A от гравитации центра B массой M.
+    def __init__(self, stars=None, planets=None, satellites=None, interactions=False):
+        self.stars = stars if stars is not None else []
+        self.planets = planets if planets is not None else []
+        self.satellites = satellites if satellites is not None else []
+        self.time = 0.0
+        # ПО ЗАДАНИЮ планеты НЕ сталкиваются — поэтому по умолчанию False:
+        #   планеты проходят сквозь точки пересечения орбит, ничего не сливается.
+        # interactions=True — необязательный «весёлый» режим: планеты
+        #   сталкиваются, сливаются и падают на звёзды (для зачёта держать False).
+        self.interactions = interactions
 
-        a = G * M / r²   (направление — к центру)
+    def step(self, dt):
+        """
+        Один шаг всей системы. Возвращает (removed_planets, removed_satellites) —
+        тела, исчезнувшие за этот шаг (нужно вызывающему, чтобы стереть их с холста).
+        """
+        # Положения планет на начало кадра нужны спутникам для интерполяции.
+        old_pos = {id(p): (p.x, p.y) for p in self.planets}
 
-    При r → 0 (коллизия) возвращает (0, 0) во избежание деления на ноль.
-    """
-    dx = bx_center - ax_body
-    dy = by_center - ay_body
-    r2 = dx * dx + dy * dy
-    if r2 < 1e-6:
-        return 0.0, 0.0
-    r   = math.sqrt(r2)
-    a   = G * M_center / r2     # |a| = G*M/r²
-    return a * dx / r, a * dy / r
+        # 1) Планеты движутся под притяжением своих звёзд.
+        for planet in self.planets:
+            planet.step(dt)
 
+        # 2-3) Столкновения: слияние касающихся планет + поглощение звёздами.
+        removed_planets = []
+        removed_satellites = []
+        if self.interactions:
+            removed_planets = self._merge_planets()
+            absorbed, removed_satellites = self._absorb_into_stars()
+            removed_planets += absorbed
 
-def _merge_planets(planets, satellites):
-    """
-    Слияние касающихся планет (неупругий удар, тела слипаются).
+        # 4) Спутники движутся (чувствуют и планету, и звезду).
+        for sat in self.satellites:
+            sat.step(dt, old_pos[id(sat.planet)])
 
-    Проверяем все пары; если центры ближе R₁+R₂ — планеты сливаются:
-      • выживает более массивная (при равенстве — первая),
-      • масса         = m₁ + m₂,
-      • скорость      = (m₁v₁ + m₂v₂) / M     (сохранение импульса),
-      • позиция       = центр масс,
-      • радиус        = √(R₁² + R₂²)          (сохранение площади),
-      • выживший сохраняет СВОЮ звезду,
-      • спутники поглощённой планеты переходят к выжившему телу.
+        self.time += dt
+        return removed_planets, removed_satellites
 
-    Планеты-«жертвы» удаляются из списка planets (in-place). Функция
-    возвращает список удалённых планет, чтобы вызывающий код стёр их
-    изображения с холста.
-    """
-    absorbed = set()
-    removed  = []
-    n = len(planets)
+    def fit_to_screen(self, half_w, half_h, margin=12):
+        """
+        Масштабирует всю систему так, чтобы она крупно заполнила холст
+        (центр холста = точка (0, 0)). Все координаты и радиусы орбит
+        умножаются на один коэффициент, поэтому пересечения орбит и
+        «звёзды вне орбит» сохраняются, а скорости пересчитываются под
+        новые радиусы. Вызывать ДО запуска анимации.
 
-    for i in range(n):
-        a = planets[i]
-        if id(a) in absorbed:
-            continue
-        for j in range(i + 1, n):
-            b = planets[j]
-            if id(b) in absorbed:
+        Чем крупнее система, тем мельче планеты относительно орбит —
+        тем реже они визуально накладываются.
+        """
+        ext_x = max(abs(s.x) + max(s.orbit_radii) for s in self.stars)
+        ext_y = max(abs(s.y) + max(s.orbit_radii) for s in self.stars)
+        s = min((half_w - margin) / ext_x, (half_h - margin) / ext_y)
+
+        for star in self.stars:
+            star.x *= s
+            star.y *= s
+            star.orbit_radii = [r * s for r in star.orbit_radii]
+        for p in self.planets:
+            p.x *= s
+            p.y *= s
+            p.orbit_radius *= s
+            p.set_circular_orbit()
+        for sat in self.satellites:
+            sat.x *= s
+            sat.y *= s
+            sat.orbit_radius *= s
+            sat.set_circular_orbit()
+
+    # ── Слияние планет ──────────────────────────────────────────────
+    def _merge_planets(self):
+        """
+        Сливает все касающиеся пары планет. Выживает более массивная
+        (при равенстве — первая) и поглощает другую через Planet.absorb.
+        Возвращает список исчезнувших планет.
+        """
+        absorbed = set()
+        removed = []
+        ps = self.planets
+        n = len(ps)
+
+        for i in range(n):
+            a = ps[i]
+            if id(a) in absorbed:
+                continue
+            for j in range(i + 1, n):
+                b = ps[j]
+                if id(b) in absorbed:
+                    continue
+                if not a.touches(b):
+                    continue
+
+                survivor, victim = (a, b) if a.mass >= b.mass else (b, a)
+                survivor.absorb(victim)
+                absorbed.add(id(victim))
+                removed.append(victim)
+
+                if victim is a:          # внешнюю планету a поглотили — её цикл окончен
+                    break
+
+        if absorbed:
+            self.planets = [p for p in ps if id(p) not in absorbed]
+        return removed
+
+    # ── Поглощение планет звёздами ──────────────────────────────────
+    def _absorb_into_stars(self):
+        """
+        Планеты, коснувшиеся любой звезды, падают на неё (Star.absorb).
+        Их спутники исчезают вместе с ними.
+        Возвращает (removed_planets, removed_satellites).
+        """
+        survivors = []
+        removed_planets = []
+        removed_satellites = []
+
+        for p in self.planets:
+            hit = next((s for s in self.stars if p.touches(s)), None)
+            if hit is None:
+                survivors.append(p)
                 continue
 
-            dx = b.x - a.x
-            dy = b.y - a.y
-            rsum = a.R + b.R
-            if dx * dx + dy * dy >= rsum * rsum:
-                continue
+            hit.absorb(p)
+            removed_planets.append(p)
+            removed_satellites.extend(p.satellites)
+            p.satellites = []
 
-            # Кто выживает (более массивный), кого поглощаем
-            survivor, victim = (a, b) if a.mass >= b.mass else (b, a)
+        if removed_planets:
+            self.planets = survivors
+        if removed_satellites:
+            dead = {id(s) for s in removed_satellites}
+            self.satellites = [s for s in self.satellites if id(s) not in dead]
 
-            M = a.mass + b.mass
-            survivor.x  = (a.mass * a.x  + b.mass * b.x)  / M
-            survivor.y  = (a.mass * a.y  + b.mass * b.y)  / M
-            survivor.vx = (a.mass * a.vx + b.mass * b.vx) / M
-            survivor.vy = (a.mass * a.vy + b.mass * b.vy) / M
-            survivor.R  = math.sqrt(a.R * a.R + b.R * b.R)
-            survivor.mass = M
-
-            # Спутники жертвы переходят к выжившему. Скорость им НЕ
-            # подправляем (честная физика): дальше луна эволюционирует
-            # под реальной гравитацией нового тела и звезды — если
-            # орбита нового тела хаотична, луну может сорвать. Так и надо.
-            for s in victim.satellites:
-                s.planet = survivor
-                survivor.satellites.append(s)
-            victim.satellites = []
-
-            absorbed.add(id(victim))
-            removed.append(victim)
-
-            # Если поглотили текущую внешнюю планету a — её цикл закончен
-            if victim is a:
-                break
-
-    if absorbed:
-        planets[:] = [p for p in planets if id(p) not in absorbed]
-
-    return removed
+        return removed_planets, removed_satellites
 
 
-def _absorb_into_stars(planets, satellites, stars):
+# ═══════════════════════════════════════════════════════════════════
+#  ПОСТРОЕНИЕ СИСТЕМЫ ПО УМОЛЧАНИЮ
+# ═══════════════════════════════════════════════════════════════════
+
+ORBIT_BASE = 30      # радиус первой орбиты (пикс.)
+ORBIT_STEP = 25      # шаг между орбитами (пикс.)
+MAX_PER_ORBIT = 3    # максимум планет на одной орбите
+PLANET_RADIUS = 6    # визуальный размер планеты (пикс.)
+SAT_ORBIT_R = 10     # радиус орбиты спутника
+SAT_RADIUS = 2       # визуальный размер спутника (пикс.)
+
+# Массы подобраны так, чтобы G·M совпадало со «старыми» числами (100/5/0.1),
+# поэтому скорости и орбиты выглядят как раньше, а G — настоящая.
+STAR_MASS = 100.0 / G
+PLANET_MASS = 5.0 / G
+SAT_MASS = 0.1 / G
+
+PLANET_COLORS = ["#00FF80", "#00AAFF", "#FF8800", "#FF44FF"]
+STAR_COLORS = ["#FFD700", "#AAD4FF", "#FFA040", "#FFFFFF"]
+
+
+def orbit_radius(n):
+    """Радиус n-й орбиты (n начинается с 1)."""
+    return ORBIT_BASE + (n - 1) * ORBIT_STEP
+
+
+def build_default_system():
     """
-    Поглощение планет звёздами.
+    Собирает систему из 4 звёзд с планетами и спутниками.
 
-    Если планета (после хаотичных орбит может налететь на ЛЮБУЮ звезду)
-    касается звезды — расстояние < R_star + R_planet — она падает на звезду:
-      • масса звезды растёт      (star.mass += planet.mass),
-      • радиус звезды растёт     (R = √(R_star² + R_planet²), сохранение площади),
-      • планета исчезает, её спутники тоже поглощаются (исчезают).
+    Главный приём (чтобы орбиты пересекались, а планеты НЕ сталкивались, и
+    при этом БЕЗ кинематики): орбиты разных звёзд имеют ОБЩИЕ радиусы, а
+    звёзды стоят почти в одной точке (тесный квадрат, меньше шага орбит).
+    Тогда:
+      • пересекаются ТОЛЬКО орбиты одинакового радиуса. У них одинаковый
+        период (T=2π√(r³/GM)), поэтому планеты на них движутся синхронно и
+        держат постоянное расстояние;
+      • орбиты разных радиусов друг с другом не пересекаются вовсе.
+    Стартовые фазы звёзд подобраны (перебором) так, что синхронные планеты
+    разных звёзд никогда не сближаются → планеты не сталкиваются и не
+    проходят сквозь чужие звёзды, хотя орбиты пересекаются.
 
-    Растущая масса звезды усиливает её гравитацию — орбиты оставшихся
-    планет постепенно меняются. Возвращает (removed_planets, removed_sats)
-    для очистки холста.
+    Радиусы по уровням (индекс L → радиус 30+25·L). Каждый уровень есть как
+    минимум у двух звёзд → каждая орбита с кем-то пересекается:
+      Звезда1: 0,1,2,3                 Звезда2: 0,1,2,7,8
+      Звезда3: 0,1,2,3,4,5,6           Звезда4: 0,1,2,3,4,5,6,7,8
     """
-    survivors    = []
-    removed_pl   = []
-    removed_sats = []
+    # (x, y, индексы уровней орбит (по возрастанию), спутники?, фаза°)
+    star_data = [
+        (-6,  6, [0, 1, 2, 3],                False, 324.2),
+        ( 6,  6, [0, 1, 2, 7, 8],             True,  138.3),
+        (-6, -6, [0, 1, 2, 3, 4, 5, 6],       False, 137.3),
+        ( 6, -6, [0, 1, 2, 3, 4, 5, 6, 7, 8], True,  205.7),
+    ]
+    n_planets_per_star = [10, 15, 20, 25]
 
-    for p in planets:
-        hit = None
-        for star in stars:
-            dx = p.x - star.x
-            dy = p.y - star.y
-            rsum = star.R + p.R
-            if dx * dx + dy * dy < rsum * rsum:
-                hit = star
-                break
+    sim = Simulation()
+    for s_idx, (sx, sy, levels, has_sats, phase_deg) in enumerate(star_data):
+        star = Star(sx, sy, mass=STAR_MASS, color=STAR_COLORS[s_idx],
+                    label=f"Звезда {s_idx + 1}")
+        star.orbit_radii = [orbit_radius(L + 1) for L in levels]   # 30 + 25·L
+        sim.stars.append(star)
 
-        if hit is None:
-            survivors.append(p)
-            continue
+        phase0 = math.radians(phase_deg)
+        n_planets = n_planets_per_star[s_idx]
+        placed = 0
+        for li, r in enumerate(star.orbit_radii):
+            count = min(MAX_PER_ORBIT, n_planets - placed)
+            is_last = (li == len(star.orbit_radii) - 1)   # последняя = внешняя орбита
+            for k in range(count):
+                angle = phase0 + 2.0 * math.pi * k / count
+                planet = Planet(star, r, angle, R=PLANET_RADIUS,
+                                color=PLANET_COLORS[s_idx], mass=PLANET_MASS)
+                planet.set_circular_orbit()
+                sim.planets.append(planet)
 
-        hit.mass += p.mass
-        hit.R = math.sqrt(hit.R * hit.R + p.R * p.R)
-        removed_pl.append(p)
-        removed_sats.extend(p.satellites)   # спутники падают вместе с планетой
-        p.satellites = []
+                # Спутники — у планет последней (внешней) орбиты звёзд 2 и 4.
+                if has_sats and is_last:
+                    for sat_k in range(2):
+                        sat = Satellite(planet, SAT_ORBIT_R, math.pi * sat_k,
+                                        mass=SAT_MASS, R=SAT_RADIUS)
+                        sat.set_circular_orbit()
+                        planet.satellites.append(sat)
+                        sim.satellites.append(sat)
+                placed += 1
 
-    if removed_pl:
-        planets[:] = survivors
-    if removed_sats:
-        dead = {id(s) for s in removed_sats}
-        satellites[:] = [s for s in satellites if id(s) not in dead]
-
-    return removed_pl, removed_sats
-
-
-def recalculate_positions(planets, satellites, stars, dt):
-    """
-    Один шаг интегрирования Эйлер-Крёмер для всей системы.
-
-    Порядок:
-      1) Планеты  → гравитация своей звезды (инерциальная СО)
-      2) Слияние касающихся планет (_merge_planets)
-      3) Поглощение планет звёздами (_absorb_into_stars) — звезда растёт
-      4) Спутники → настоящая инерциальная СО: гравитация своей планеты
-         И звезды этой планеты, мелкими подшагами с интерполяцией
-         положения планеты внутри шага.
-
-    Возвращает (removed_planets, removed_satellites) — что удалено за шаг
-    (слияние + падение на звёзды), чтобы вызывающий стёр это с холста.
-    """
-    # Старые позиции планет нужны для интерполяции внутри подшагов спутника.
-    old_pos = {id(p): (p.x, p.y) for p in planets}
-
-    # ── Планеты (инерциальная СО, гравитация своей звезды) ────
-    for p in planets:
-        ax, ay = _gravity_acceleration(
-            p.x, p.y,
-            p.star.x, p.star.y,
-            p.star.mass
-        )
-        p.vx += ax * dt     # сначала скорость
-        p.vy += ay * dt
-        p.x  += p.vx * dt  # потом позиция (новая скорость)
-        p.y  += p.vy * dt
-
-    # ── Слияние касающихся планет ─────────────────────────────
-    removed_planets = _merge_planets(planets, satellites)
-
-    # ── Поглощение планет звёздами (звезда растёт) ────────────
-    absorbed_pl, removed_sats = _absorb_into_stars(planets, satellites, stars)
-    removed_planets += absorbed_pl
-
-    # ── Спутники (настоящая инерциальная СО) ──────────────────
-    # Спутник чувствует И свою планету, И её звезду. Чтобы спутник и
-    # планета не растащились, положение планеты внутри кадра берётся
-    # линейной интерполяцией между старым и новым (за кадр планета
-    # проходит почти прямой отрезок).
-    sub_dt = dt / SATELLITE_SUBSTEPS
-    for sat in satellites:
-        p    = sat.planet
-        star = p.star
-        px0, py0 = old_pos[id(p)]     # выживший существовал на начало кадра
-        pnx, pny = p.x, p.y
-
-        for k in range(SATELLITE_SUBSTEPS):
-            frac = (k + 0.5) / SATELLITE_SUBSTEPS
-            ppx = px0 + (pnx - px0) * frac
-            ppy = py0 + (pny - py0) * frac
-
-            apx, apy = _gravity_acceleration(sat.x, sat.y, ppx, ppy, p.mass)
-            asx, asy = _gravity_acceleration(sat.x, sat.y, star.x, star.y, star.mass)
-
-            sat.vx += (apx + asx) * sub_dt
-            sat.vy += (apy + asy) * sub_dt
-            sat.x  += sat.vx * sub_dt
-            sat.y  += sat.vy * sub_dt
-
-    return removed_planets, removed_sats
+    return sim
 
 
 if __name__ == "__main__":
