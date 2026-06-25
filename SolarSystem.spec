@@ -5,7 +5,7 @@ a = Analysis(
     ['solar_main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('solar_system.txt', '.'), ('double_star.txt', '.'), ('one_satellite.txt', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

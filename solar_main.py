@@ -24,6 +24,7 @@
 """
 
 import os
+import sys
 
 import pygame
 
@@ -32,6 +33,19 @@ from solar_model import build_default_system
 from solar_input import load_system, save_system
 
 SOLAR_FILE = "solar_system.txt"
+
+
+def resource_path(name):
+    """
+    Путь к ВСТРОЕННОМУ в сборку файлу.
+
+    PyInstaller (--onefile) распаковывает вшитые данные во временную папку и
+    кладёт её путь в sys._MEIPASS. Если запущен обычный .py — берём папку
+    рядом со скриптом. Так зашитые в exe .txt-конфиги находятся и из exe,
+    и при обычном запуске.
+    """
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
 
 # Поля от размеров экрана (на рамку окна, заголовок, панель задач).
 SCREEN_MARGIN_X = 40
@@ -302,13 +316,22 @@ class SolarApp:
 
 def main():
     if os.path.exists(SOLAR_FILE):
+        # 1) Пользовательская конфигурация рядом с exe (приоритет, её можно править).
         print(f"[main] Загружаю конфигурацию из '{SOLAR_FILE}'")
         sim = load_system(SOLAR_FILE)
     else:
-        print(f"[main] Файл '{SOLAR_FILE}' не найден — генерирую систему по умолчанию")
-        sim = build_default_system()
+        seed = resource_path(SOLAR_FILE)
+        if os.path.exists(seed):
+            # 2) Встроенная в exe конфигурация — используем как заготовку.
+            print(f"[main] Беру встроенную конфигурацию '{seed}'")
+            sim = load_system(seed)
+        else:
+            # 3) Совсем нет файла — генерируем систему по умолчанию.
+            print("[main] Конфигурация не найдена — генерирую систему по умолчанию")
+            sim = build_default_system()
+        # Пишем рабочую копию рядом с exe, чтобы её можно было править/сохранять.
         save_system(SOLAR_FILE, sim)
-        print(f"[main] Конфигурация сохранена в '{SOLAR_FILE}'")
+        print(f"[main] Рабочая копия сохранена в '{SOLAR_FILE}'")
 
     SolarApp(sim).run()
 
