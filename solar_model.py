@@ -177,7 +177,8 @@ class Simulation:
 ORBIT_BASE = 30      # радиус первой орбиты (пикс.)
 ORBIT_STEP = 25      # шаг между орбитами (пикс.)
 MAX_PER_ORBIT = 3    # максимум планет на одной орбите
-PLANET_RADIUS = 6    # визуальный размер планеты (пикс.)
+STAR_RADIUS = 14     # визуальный размер звезды (пикс.)
+PLANET_RADIUS = 7    # визуальный размер планеты (пикс.)
 SAT_ORBIT_R = 10     # радиус орбиты спутника
 SAT_RADIUS = 2       # визуальный размер спутника (пикс.)
 
@@ -229,7 +230,7 @@ def build_default_system():
     sim = Simulation()
     for s_idx, (sx, sy, levels, has_sats, phase_deg) in enumerate(star_data):
         star = Star(sx, sy, mass=STAR_MASS, color=STAR_COLORS[s_idx],
-                    label=f"Звезда {s_idx + 1}")
+                    R=STAR_RADIUS, label=f"Звезда {s_idx + 1}")
         star.orbit_radii = [orbit_radius(L + 1) for L in levels]   # 30 + 25·L
         sim.stars.append(star)
 

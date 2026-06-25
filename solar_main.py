@@ -2,188 +2,301 @@
 # license: GPLv3
 
 """
-Симуляция «Солнечной системы» — точка входа.
+Симуляция «Солнечной системы» — точка входа (pygame).
 
 Состав системы по умолчанию (build_default_system в solar_model):
   Звезда 1: 10 планет        Звезда 2: 15 планет (+спутники)
   Звезда 3: 20 планет        Звезда 4: 25 планет (+спутники)
 
-Орбиты разных звёзд пересекаются → планеты сталкиваются и сливаются,
-могут падать на звёзды (звезда при этом растёт). Всё это — честная
-физика в solar_model / solar_objects.
+Орбиты разных звёзд пересекаются. По умолчанию планеты НЕ сталкиваются
+(interactions=False — проходят сквозь точки пересечения орбит). В режиме
+«Взаимодействие: вкл» планеты сталкиваются, сливаются и падают на звёзды
+(звезда при этом растёт). Вся физика — в solar_model / solar_objects.
 
-Всё состояние приложения (тела, кнопки, флаги) живёт в классе SolarApp —
-никаких глобальных переменных.
+Это pygame-версия: окно перерисовывается каждый кадр (immediate-mode),
+а не двигает дескрипторы фигур, как было в tkinter. Тела рисуют себя
+сами методом render(); этот модуль отвечает за окно, цикл и управление.
+
+Управление:
+  • кнопки внизу (мышью) и горячие клавиши:
+  • SPACE — старт/пауза   O — орбиты   T — след   I — взаимодействие
+  • ←/→ — скорость        ↑/↓ — шаг dt   ESC — выход
 """
 
 import os
-import tkinter
 
-from solar_vis import set_window_size, create_legend, draw_orbits
+import pygame
 
-# Поля, оставляемые от размеров экрана: по бокам — на рамку окна,
-# снизу — на заголовок, панель задач и панель управления.
-SCREEN_MARGIN_X = 20
-SCREEN_MARGIN_Y = 120
+from solar_vis import set_window_size, draw_orbits, draw_legend, get_font
 from solar_model import build_default_system
 from solar_input import load_system, save_system
 
 SOLAR_FILE = "solar_system.txt"
 
+# Поля от размеров экрана (на рамку окна, заголовок, панель задач).
+SCREEN_MARGIN_X = 40
+SCREEN_MARGIN_Y = 140
+
+BAR_H = 56                      # высота нижней панели управления
+BG_COLOR = (5, 5, 15)          # фон космоса (#05050f)
+PANEL_COLOR = (13, 13, 31)     # фон панели (#0d0d1f)
+BTN_COLOR = (30, 58, 95)       # кнопка (#1e3a5f)
+BTN_HOVER = (45, 82, 132)      # кнопка под курсором
+INFO_COLOR = (136, 170, 204)   # текст счётчиков
+HINT_COLOR = (90, 100, 130)    # подсказка по клавишам
+TRACK_COLOR = (60, 70, 100)    # дорожка ползунка
+HANDLE_COLOR = (140, 180, 230) # бегунок ползунка
+LABEL_COLOR = (170, 170, 170)  # подписи на панели
+
+
+class Button:
+    """Прямоугольная кнопка с динамической подписью и действием по клику."""
+
+    def __init__(self, rect, label_fn, action):
+        self.rect = pygame.Rect(rect)
+        self.label_fn = label_fn      # функция → текущий текст кнопки
+        self.action = action          # функция, вызываемая по клику
+
+    def draw(self, surface, font, mouse_pos):
+        hovered = self.rect.collidepoint(mouse_pos)
+        pygame.draw.rect(surface, BTN_HOVER if hovered else BTN_COLOR,
+                         self.rect, border_radius=4)
+        text = font.render(self.label_fn(), True, (255, 255, 255))
+        surface.blit(text, (self.rect.centerx - text.get_width() // 2,
+                            self.rect.centery - text.get_height() // 2))
+
+
+class Slider:
+    """Горизонтальный ползунок: тянется/кликается мышью, значение — целое."""
+
+    def __init__(self, rect, vmin, vmax, get_value, set_value):
+        self.rect = pygame.Rect(rect)
+        self.vmin = vmin
+        self.vmax = vmax
+        self.get_value = get_value      # функция → текущее значение
+        self.set_value = set_value      # функция(value) → записать значение
+        self.dragging = False
+
+    def _value_to_x(self, value):
+        frac = (value - self.vmin) / (self.vmax - self.vmin)
+        return self.rect.x + int(frac * self.rect.w)
+
+    def _x_to_value(self, x):
+        frac = (x - self.rect.x) / self.rect.w
+        frac = max(0.0, min(1.0, frac))
+        return round(self.vmin + frac * (self.vmax - self.vmin))
+
+    def handle_event(self, event):
+        """Возвращает True, если событие «съедено» ползунком."""
+        grab = self.rect.inflate(16, 18)        # зона захвата чуть шире дорожки
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if grab.collidepoint(event.pos):
+                self.dragging = True
+                self.set_value(self._x_to_value(event.pos[0]))
+                return True
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self.dragging = False
+        elif event.type == pygame.MOUSEMOTION and self.dragging:
+            self.set_value(self._x_to_value(event.pos[0]))
+            return True
+        return False
+
+    def draw(self, surface):
+        cy = self.rect.centery
+        pygame.draw.line(surface, TRACK_COLOR,
+                         (self.rect.x, cy), (self.rect.right, cy), 3)
+        hx = self._value_to_x(self.get_value())
+        pygame.draw.circle(surface, HANDLE_COLOR, (hx, cy), 7)
+
 
 class SolarApp:
-    """GUI-приложение: окно, кнопки и цикл анимации над одной Simulation."""
+    """Окно, цикл анимации и управление над одной Simulation."""
 
     def __init__(self, sim):
         self.sim = sim
-        self.running = False
+        self.running_sim = False       # идёт ли интегрирование
         self.show_trails = True
         self.show_orbits = True
+        self.dt = 1.0                  # шаг по времени за один шаг физики
+        self.speed = 50                # 0..100 — сколько шагов физики за кадр
 
-        self._build_window()
-        self.sim.fit_to_screen(self._half_w, self._half_h)
-        self._draw_all_bodies()
+        pygame.init()
+        info = pygame.display.Info()
+        self.canvas_w = max(640, min(1500, info.current_w - SCREEN_MARGIN_X))
+        self.canvas_h = max(480, min(950, info.current_h - SCREEN_MARGIN_Y))
+        set_window_size(self.canvas_w, self.canvas_h)
 
-    # ── Создание окна и панели управления ──────────────────────────
-    def _build_window(self):
-        self.root = tkinter.Tk()
-        self.root.title("Солнечная система — 4 звезды")
-        self.root.resizable(False, False)
+        self.screen = pygame.display.set_mode((self.canvas_w, self.canvas_h + BAR_H))
+        pygame.display.set_caption("Солнечная система — 4 звезды (pygame)")
+        self.clock = pygame.time.Clock()
+        self.font = get_font(14)
+        self.small = get_font(12)
 
-        # Подстраиваем холст под размер экрана (с полями под рамку и панели).
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        canvas_w = max(400, screen_w - SCREEN_MARGIN_X)
-        canvas_h = max(300, screen_h - SCREEN_MARGIN_Y)
-        set_window_size(canvas_w, canvas_h)
-        self._half_w = canvas_w // 2     # для масштабирования системы под холст
-        self._half_h = canvas_h // 2
+        # Крупно вписываем систему в холст (центр холста = точка (0, 0)).
+        self.sim.fit_to_screen(self.canvas_w // 2, self.canvas_h // 2)
 
-        self.canvas = tkinter.Canvas(self.root, width=canvas_w,
-                                     height=canvas_h, bg="#05050f")
-        self.canvas.pack(side=tkinter.TOP)
+        self._build_controls()
+        self._legend = self._legend_entries()
 
-        ctrl = tkinter.Frame(self.root, bg="#0d0d1f", pady=5)
-        ctrl.pack(side=tkinter.BOTTOM, fill=tkinter.X)
-
-        self.start_button = tkinter.Button(
-            ctrl, text="Старт", command=self.toggle_run,
-            width=8, bg="#1e3a5f", fg="white", relief=tkinter.FLAT)
-        self.start_button.pack(side=tkinter.LEFT, padx=8)
-
-        tkinter.Label(ctrl, text="dt:", bg="#0d0d1f", fg="#aaaaaa").pack(side=tkinter.LEFT)
-        self.time_step = tkinter.DoubleVar(value=1.0)
-        tkinter.Entry(ctrl, textvariable=self.time_step, width=5, bg="#1a1a2e",
-                      fg="white", insertbackground="white").pack(side=tkinter.LEFT, padx=4)
-
-        tkinter.Label(ctrl, text="  Скорость:", bg="#0d0d1f",
-                      fg="#aaaaaa").pack(side=tkinter.LEFT)
-        self.time_speed = tkinter.DoubleVar(value=50)
-        tkinter.Scale(ctrl, variable=self.time_speed, from_=0, to=100,
-                      orient=tkinter.HORIZONTAL, length=130, showvalue=False,
-                      bg="#0d0d1f", fg="white", troughcolor="#1e3a5f",
-                      highlightthickness=0).pack(side=tkinter.LEFT)
-
-        self.orbit_button = tkinter.Button(
-            ctrl, text="Скрыть орбиты", command=self.toggle_orbits,
-            width=15, bg="#1e3a5f", fg="white", relief=tkinter.FLAT)
-        self.orbit_button.pack(side=tkinter.LEFT, padx=10)
-
-        self.trail_button = tkinter.Button(
-            ctrl, text="Скрыть след", command=self.toggle_trails,
-            width=15, bg="#1e3a5f", fg="white", relief=tkinter.FLAT)
-        self.trail_button.pack(side=tkinter.LEFT, padx=10)
-
-        self.interaction_button = tkinter.Button(
-            ctrl, text=self._interaction_text(), command=self.toggle_interactions,
-            width=22, bg="#1e3a5f", fg="white", relief=tkinter.FLAT)
-        self.interaction_button.pack(side=tkinter.LEFT, padx=10)
-
-        self.displayed_time = tkinter.StringVar(value="0.0 сек.")
-        tkinter.Label(ctrl, textvariable=self.displayed_time, width=16,
-                      bg="#0d0d1f", fg="#88aacc").pack(side=tkinter.RIGHT, padx=8)
-
-    # ── Первичная отрисовка ────────────────────────────────────────
-    def _draw_all_bodies(self):
-        # Орбиты рисуем первыми, чтобы они были под телами.
-        draw_orbits(self.canvas, self.sim.stars)
-        for star in self.sim.stars:
-            star.draw(self.canvas)
-        for planet in self.sim.planets:
-            planet.draw(self.canvas)
-        for sat in self.sim.satellites:
-            sat.draw(self.canvas)
-
-        # Легенда: для каждой звезды берём цвет и число её планет.
+    # ── Подготовка ─────────────────────────────────────────────────
+    def _legend_entries(self):
+        """Для каждой звезды — (подпись, цвет её планет, число планет)."""
         entries = []
         for star in self.sim.stars:
             own = [p for p in self.sim.planets if p.star is star]
             color = own[0].color if own else star.color
             entries.append((star.label, color, len(own)))
-        create_legend(self.canvas, entries)
+        return entries
 
-    # ── Кнопки ──────────────────────────────────────────────────────
+    def _build_controls(self):
+        y = self.canvas_h + (BAR_H - 32) // 2
+        h = 32
+        self.buttons = [
+            Button((10, y, 110, h),
+                   lambda: "Пауза" if self.running_sim else "Старт",
+                   self.toggle_run),
+            Button((128, y, 140, h),
+                   lambda: "Скрыть орбиты" if self.show_orbits else "Орбиты",
+                   self.toggle_orbits),
+            Button((276, y, 130, h),
+                   lambda: "Скрыть след" if self.show_trails else "След",
+                   self.toggle_trails),
+            Button((414, y, 210, h),
+                   lambda: f"Взаимодействие: {'вкл' if self.sim.interactions else 'выкл'}",
+                   self.toggle_interactions),
+        ]
+
+        # Ползунок скорости: подпись «Скорость» слева, дорожка, значение справа.
+        self._speed_label_x = 644
+        self._speed_value_x = 644 + 70 + 180 + 10
+        slider_rect = (644 + 70, self.canvas_h + BAR_H // 2 - 3, 180, 6)
+        self.slider = Slider(
+            slider_rect, 0, 100,
+            get_value=lambda: self.speed,
+            set_value=lambda v: setattr(self, "speed", v),
+        )
+
+    # ── Действия кнопок/клавиш ─────────────────────────────────────
     def toggle_run(self):
-        """Старт / Пауза."""
-        self.running = not self.running
-        if self.running:
-            self.start_button.config(text="Пауза")
-            self.animate()
-        else:
-            self.start_button.config(text="Старт")
+        self.running_sim = not self.running_sim
 
     def toggle_orbits(self):
-        """Показать / скрыть окружности орбит."""
         self.show_orbits = not self.show_orbits
-        self.canvas.itemconfigure("orbit", state="normal" if self.show_orbits else "hidden")
-        self.orbit_button.config(text="Скрыть орбиты" if self.show_orbits else "Показать орбиты")
 
     def toggle_trails(self):
-        """Показать / скрыть следы планет."""
         self.show_trails = not self.show_trails
-        self.canvas.itemconfigure("trail", state="normal" if self.show_trails else "hidden")
-        self.trail_button.config(text="Скрыть след" if self.show_trails else "Показать след")
-
-    def _interaction_text(self):
-        state = "вкл" if self.sim.interactions else "выкл"
-        return f"Взаимодействие: {state}"
 
     def toggle_interactions(self):
-        """Включает / выключает гравитационное взаимодействие планет между собой."""
         self.sim.interactions = not self.sim.interactions
-        self.interaction_button.config(text=self._interaction_text())
 
-    # ── Один кадр анимации ─────────────────────────────────────────
-    def animate(self):
-        dt = self.time_step.get()
-        removed_planets, removed_sats = self.sim.step(dt)
+    # ── Шаг симуляции ──────────────────────────────────────────────
+    def _steps_this_frame(self):
+        """Сколько шагов физики выполнить за кадр (зависит от «скорости»)."""
+        return max(1, round(self.speed / 8))     # 1..~13
 
-        # Стираем исчезнувшие тела (слияние планет + падение на звёзды).
-        for victim in removed_planets:
-            if victim.image is not None:
-                self.canvas.delete(victim.image)
-            victim.clear_trail(self.canvas)
-        for sat in removed_sats:
-            if sat.image is not None:
-                self.canvas.delete(sat.image)
+    def _advance(self):
+        for _ in range(self._steps_this_frame()):
+            self.sim.step(self.dt)               # исчезнувшие тела просто
+            for planet in self.sim.planets:      # выпадают из списков —
+                planet.record_trail()            # в immediate-mode стирать нечего
 
-        # Двигаем тела к новым позициям.
-        for star in self.sim.stars:        # звезда могла подрасти, поглотив планету
-            star.redraw(self.canvas)
+    # ── Отрисовка кадра ────────────────────────────────────────────
+    def _render(self):
+        s = self.screen
+        s.fill(BG_COLOR)
+
+        if self.show_orbits:
+            draw_orbits(s, self.sim.stars)
+        if self.show_trails:
+            for planet in self.sim.planets:
+                planet.render_trail(s)
+        for star in self.sim.stars:
+            star.render(s)
         for planet in self.sim.planets:
-            planet.extend_trail(self.canvas)
-            planet.redraw(self.canvas)
+            planet.render(s)
         for sat in self.sim.satellites:
-            sat.redraw(self.canvas)
+            sat.render(s)
 
-        self.displayed_time.set("%.1f сек." % self.sim.time)
+        draw_legend(s, self._legend)
+        self._render_hint()
+        self._render_bar()
+        pygame.display.flip()
 
-        if self.running:
-            delay = 101 - int(self.time_speed.get())   # 1 мс (быстро) … 101 мс (медленно)
-            self.canvas.after(delay, self.animate)
+    def _render_hint(self):
+        hint = ("SPACE пуск/пауза   O орбиты   T след   I взаимод.   "
+                "←/→ скорость   ↑/↓ dt   ESC выход")
+        text = self.small.render(hint, True, HINT_COLOR)
+        self.screen.blit(text, (self.canvas_w // 2 - text.get_width() // 2,
+                                self.canvas_h - 20))
+
+    def _render_bar(self):
+        s = self.screen
+        pygame.draw.rect(s, PANEL_COLOR, (0, self.canvas_h, self.canvas_w, BAR_H))
+        mouse = pygame.mouse.get_pos()
+        for btn in self.buttons:
+            btn.draw(s, self.small, mouse)
+
+        # Ползунок скорости + подписи.
+        cy = self.canvas_h + BAR_H // 2
+        label = self.small.render("Скорость", True, LABEL_COLOR)
+        s.blit(label, (self._speed_label_x, cy - label.get_height() // 2))
+        self.slider.draw(s)
+        value = self.small.render(str(self.speed), True, LABEL_COLOR)
+        s.blit(value, (self._speed_value_x, cy - value.get_height() // 2))
+
+        info = (f"dt={self.dt:.1f}   время={self.sim.time:.1f}   "
+                f"планет={len(self.sim.planets)}   "
+                f"спутников={len(self.sim.satellites)}")
+        text = self.font.render(info, True, INFO_COLOR)
+        s.blit(text, (self.canvas_w - text.get_width() - 12,
+                      self.canvas_h + (BAR_H - text.get_height()) // 2))
+
+    # ── Главный цикл ───────────────────────────────────────────────
+    def _handle_event(self, event):
+        """Возвращает False, если пора выходить."""
+        if event.type == pygame.QUIT:
+            return False
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                return False
+            elif event.key == pygame.K_SPACE:
+                self.toggle_run()
+            elif event.key == pygame.K_o:
+                self.toggle_orbits()
+            elif event.key == pygame.K_t:
+                self.toggle_trails()
+            elif event.key == pygame.K_i:
+                self.toggle_interactions()
+            elif event.key == pygame.K_RIGHT:
+                self.speed = min(100, self.speed + 5)
+            elif event.key == pygame.K_LEFT:
+                self.speed = max(0, self.speed - 5)
+            elif event.key == pygame.K_UP:
+                self.dt = round(min(10.0, self.dt + 0.1), 1)
+            elif event.key == pygame.K_DOWN:
+                self.dt = round(max(0.1, self.dt - 0.1), 1)
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if not self.slider.handle_event(event):     # сначала ползунок
+                for btn in self.buttons:
+                    if btn.rect.collidepoint(event.pos):
+                        btn.action()
+                        break
+        elif event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+            self.slider.handle_event(event)             # перетаскивание/отпускание
+        return True
 
     def run(self):
-        self.root.mainloop()
+        alive = True
+        while alive:
+            for event in pygame.event.get():
+                if not self._handle_event(event):
+                    alive = False
+                    break
+            if alive and self.running_sim:
+                self._advance()
+            self._render()
+            self.clock.tick(60)
+        pygame.quit()
 
 
 def main():

@@ -24,7 +24,9 @@
 import math
 from collections import deque
 
-from solar_vis import scale_x, scale_y, TRAIL_MAX
+import pygame
+
+from solar_vis import scale_x, scale_y, TRAIL_MAX, to_rgb, get_font
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -81,7 +83,6 @@ class SpaceBody:
         self.mass = mass
         self.color = color
         self.R = R
-        self.image = None          # ссылка на овал на холсте (заполняется в draw)
 
     # ── Физика, общая для всех тел ─────────────────────────────────
     def gravity_from(self, other):
@@ -95,17 +96,11 @@ class SpaceBody:
         rsum = self.R + other.R
         return dx * dx + dy * dy < rsum * rsum
 
-    # ── Рисование (по умолчанию — закрашенный круг без обводки) ─────
-    def draw(self, canvas):
-        """Создаёт изображение тела на холсте."""
-        x, y, r = scale_x(self.x), scale_y(self.y), self.R
-        self.image = canvas.create_oval(x - r, y - r, x + r, y + r,
-                                        fill=self.color, outline="")
-
-    def redraw(self, canvas):
-        """Перемещает уже существующее изображение к новым координатам."""
-        x, y, r = scale_x(self.x), scale_y(self.y), self.R
-        canvas.coords(self.image, x - r, y - r, x + r, y + r)
+    # ── Рисование (immediate-mode pygame: тело рисуется каждый кадр) ─
+    def render(self, surface):
+        """Рисует тело закрашенным кругом по текущим координатам."""
+        pygame.draw.circle(surface, to_rgb(self.color),
+                           (scale_x(self.x), scale_y(self.y)), int(self.R))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -122,13 +117,15 @@ class Star(SpaceBody):
         self.label = label
         self.orbit_radii = []      # радиусы орбит её планет (для справки/сохранения)
 
-    def draw(self, canvas):
-        """Звезда рисуется ярким кругом с оранжевой обводкой и подписью сверху."""
-        x, y, r = scale_x(self.x), scale_y(self.y), self.R
-        self.image = canvas.create_oval(x - r, y - r, x + r, y + r,
-                                        fill=self.color, outline="orange", width=2)
-        canvas.create_text(x, y - r - 10, text=self.label, fill="white",
-                           font=("Arial", 9, "bold"))
+    def render(self, surface):
+        """Звезда — яркий круг с оранжевой обводкой и подписью сверху."""
+        sx, sy, r = scale_x(self.x), scale_y(self.y), int(self.R)
+        pygame.draw.circle(surface, to_rgb(self.color), (sx, sy), r)
+        pygame.draw.circle(surface, (255, 165, 0), (sx, sy), r, 2)   # обводка
+        if self.label:
+            font = get_font(11, bold=True)
+            text = font.render(self.label, True, (255, 255, 255))
+            surface.blit(text, (sx - text.get_width() // 2, sy - r - 16))
 
     def absorb(self, planet):
         """Поглощает упавшую планету: набирает её массу и растёт по площади."""
@@ -156,10 +153,9 @@ class Planet(SpaceBody):
         self.angle = angle
         self.satellites = []
 
-        # След («хвост») — ОДНА ломаная линия на холсте, а не куча отрезков.
-        # Храним только последние TRAIL_MAX экранных точек; саму линию
-        # переобновляем через canvas.coords(). Это резко экономит память.
-        self._trail_line = None
+        # След («хвост») — последние TRAIL_MAX экранных точек пути. В pygame
+        # каждый кадр перерисовываем ломаную заново (immediate-mode), поэтому
+        # хранить дескриптор линии, как в tkinter, не нужно.
         self._trail_points = deque()
 
     def set_circular_orbit(self):
@@ -203,31 +199,24 @@ class Planet(SpaceBody):
         other.satellites = []
 
     # ── След ───────────────────────────────────────────────────────
-    def extend_trail(self, canvas):
+    def record_trail(self):
         """
-        Добавляет текущую точку к следу и обновляет ломаную линию.
-        Хвост ограничен TRAIL_MAX точками: старые отбрасываются, поэтому
-        за планетой тянется «хвост» фиксированной длины.
+        Запоминает текущую экранную точку пути. Хвост ограничен TRAIL_MAX
+        точками: старые отбрасываются, поэтому за планетой тянется «хвост»
+        фиксированной длины. Рисование — отдельно, в render_trail().
         """
         self._trail_points.append((scale_x(self.x), scale_y(self.y)))
         if len(self._trail_points) > TRAIL_MAX:
             self._trail_points.popleft()
-        if len(self._trail_points) < 2:          # для линии нужно хотя бы 2 точки
-            return
 
-        flat = [c for point in self._trail_points for c in point]
-        if self._trail_line is None:
-            self._trail_line = canvas.create_line(*flat, fill=self.color,
-                                                  width=1, tags="trail")
-            canvas.tag_lower(self._trail_line)   # след — под планетами и звёздами
-        else:
-            canvas.coords(self._trail_line, *flat)
+    def render_trail(self, surface):
+        """Рисует след как ломаную по запомненным точкам."""
+        if len(self._trail_points) >= 2:
+            pygame.draw.lines(surface, to_rgb(self.color), False,
+                              list(self._trail_points), 1)
 
-    def clear_trail(self, canvas):
-        """Стирает след (например, когда планета исчезла)."""
-        if self._trail_line is not None:
-            canvas.delete(self._trail_line)
-            self._trail_line = None
+    def clear_trail(self):
+        """Сбрасывает накопленный след."""
         self._trail_points.clear()
 
 
