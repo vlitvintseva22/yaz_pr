@@ -52,10 +52,9 @@ class Simulation:
         Один шаг всей системы. Возвращает (removed_planets, removed_satellites) —
         тела, исчезнувшие за этот шаг (нужно вызывающему, чтобы стереть их с холста).
         """
-        # Положения планет на начало кадра нужны спутникам для интерполяции.
-        old_pos = {id(p): (p.x, p.y) for p in self.planets}
-
-        # 1) Планеты движутся под притяжением своих звёзд.
+        # 1) Планеты движутся под притяжением своих звёзд. Каждая планета
+        #    сама запоминает своё положение на начало шага (planet.prev_*),
+        #    поэтому отдельный словарь старых позиций здесь больше не нужен.
         for planet in self.planets:
             planet.step(dt)
 
@@ -67,9 +66,9 @@ class Simulation:
             absorbed, removed_satellites = self._absorb_into_stars()
             removed_planets += absorbed
 
-        # 4) Спутники движутся (чувствуют и планету, и звезду).
+        # 4) Спутники движутся (чувствуют и планету, и звезду) — единообразно step(dt).
         for sat in self.satellites:
-            sat.step(dt, old_pos[id(sat.planet)])
+            sat.step(dt)
 
         self.time += dt
         return removed_planets, removed_satellites

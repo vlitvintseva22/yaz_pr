@@ -15,10 +15,17 @@
   • вычислять притяжение к другому телу      (gravity_from)
   • проверять столкновение                    (touches)
   • сливаться с другим телом                  (absorb)
-  • рисовать себя на холсте и двигаться       (draw / redraw)
+  • двигаться на шаг dt                        (step)
+  • рисовать себя на поверхности              (render / render_orbits / render_trail)
 
 Физика движения (метод step) живёт в самих телах, а не в отдельном
 модуле — это и есть смысл ООП: объект отвечает за своё поведение.
+И планета, и спутник имеют ОДИНАКОВУЮ сигнатуру step(dt) — их можно
+двигать единообразно (полиморфизм); спутник берёт положение своей
+планеты на начало кадра из planet.prev_x/prev_y.
+
+Координаты в экранные переводит объект Viewport (solar_vis), который
+передаётся в методы render() — глобального состояния экрана нет.
 """
 
 import math
@@ -26,7 +33,7 @@ from collections import deque
 
 import pygame
 
-from solar_vis import scale_x, scale_y, TRAIL_MAX, to_rgb, get_font
+from solar_vis import TRAIL_MAX, to_rgb, get_font, ORBIT_COLOR
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -73,8 +80,6 @@ def circular_speed(mass_center, radius):
 class SpaceBody:
     """Любое тело: имеет координаты, скорость, массу, размер и цвет."""
 
-    type = "body"
-
     def __init__(self, x, y, mass, color, R):
         self.x = x
         self.y = y
@@ -97,10 +102,10 @@ class SpaceBody:
         return dx * dx + dy * dy < rsum * rsum
 
     # ── Рисование (immediate-mode pygame: тело рисуется каждый кадр) ─
-    def render(self, surface):
+    def render(self, surface, view):
         """Рисует тело закрашенным кругом по текущим координатам."""
         pygame.draw.circle(surface, to_rgb(self.color),
-                           (scale_x(self.x), scale_y(self.y)), int(self.R))
+                           (view.sx(self.x), view.sy(self.y)), int(self.R))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -110,22 +115,27 @@ class SpaceBody:
 class Star(SpaceBody):
     """Звезда — неподвижный центр. Не движется, но может расти, поглощая планеты."""
 
-    type = "star"
-
     def __init__(self, x, y, mass, color="yellow", R=13, label=""):
         super().__init__(x, y, mass, color, R)
         self.label = label
         self.orbit_radii = []      # радиусы орбит её планет (для справки/сохранения)
 
-    def render(self, surface):
+    def render(self, surface, view):
         """Звезда — яркий круг с оранжевой обводкой и подписью сверху."""
-        sx, sy, r = scale_x(self.x), scale_y(self.y), int(self.R)
+        sx, sy, r = view.sx(self.x), view.sy(self.y), int(self.R)
         pygame.draw.circle(surface, to_rgb(self.color), (sx, sy), r)
         pygame.draw.circle(surface, (255, 165, 0), (sx, sy), r, 2)   # обводка
         if self.label:
             font = get_font(11, bold=True)
             text = font.render(self.label, True, (255, 255, 255))
             surface.blit(text, (sx - text.get_width() // 2, sy - r - 16))
+
+    def render_orbits(self, surface, view):
+        """Звезда сама рисует тонкие окружности своих орбит."""
+        cx, cy = view.sx(self.x), view.sy(self.y)
+        for r in self.orbit_radii:
+            if r >= 1:
+                pygame.draw.circle(surface, ORBIT_COLOR, (cx, cy), int(r), 1)
 
     def absorb(self, planet):
         """Поглощает упавшую планету: набирает её массу и растёт по площади."""
@@ -140,8 +150,6 @@ class Star(SpaceBody):
 class Planet(SpaceBody):
     """Планета: движется под притяжением своей звезды, тянет за собой след."""
 
-    type = "planet"
-
     def __init__(self, star, orbit_radius, angle, color="#00FF80", R=6, mass=5.0):
         # Начальное положение — на орбите своей звезды под углом angle.
         x = star.x + orbit_radius * math.cos(angle)
@@ -152,6 +160,10 @@ class Planet(SpaceBody):
         self.orbit_radius = orbit_radius   # хранится для сохранения в файл
         self.angle = angle
         self.satellites = []
+
+        # Положение на начало текущего шага — нужно спутникам (см. step).
+        self.prev_x = x
+        self.prev_y = y
 
         # След («хвост») — последние TRAIL_MAX экранных точек пути. В pygame
         # каждый кадр перерисовываем ломаную заново (immediate-mode), поэтому
@@ -170,7 +182,12 @@ class Planet(SpaceBody):
           сначала обновляем скорость, потом по НОВОЙ скорости — позицию.
         Такой порядок не даёт орбитам «раскручиваться».
         Планета чувствует притяжение только своей звезды.
+
+        Перед сдвигом запоминаем позицию на начало шага (prev_x/prev_y):
+        её читают спутники, чтобы интерполировать движение планеты внутри
+        кадра (см. Satellite.step) — поэтому сигнатура step(dt) единообразна.
         """
+        self.prev_x, self.prev_y = self.x, self.y
         ax, ay = self.gravity_from(self.star)
         self.vx += ax * dt
         self.vy += ay * dt
@@ -199,13 +216,13 @@ class Planet(SpaceBody):
         other.satellites = []
 
     # ── След ───────────────────────────────────────────────────────
-    def record_trail(self):
+    def record_trail(self, view):
         """
         Запоминает текущую экранную точку пути. Хвост ограничен TRAIL_MAX
         точками: старые отбрасываются, поэтому за планетой тянется «хвост»
         фиксированной длины. Рисование — отдельно, в render_trail().
         """
-        self._trail_points.append((scale_x(self.x), scale_y(self.y)))
+        self._trail_points.append((view.sx(self.x), view.sy(self.y)))
         if len(self._trail_points) > TRAIL_MAX:
             self._trail_points.popleft()
 
@@ -227,8 +244,6 @@ class Planet(SpaceBody):
 class Satellite(SpaceBody):
     """Спутник: полноценное тело, чувствует притяжение И планеты, И её звезды."""
 
-    type = "satellite"
-
     def __init__(self, planet, orbit_radius, angle, color="white", R=3, mass=0.1):
         x = planet.x + orbit_radius * math.cos(angle)
         y = planet.y + orbit_radius * math.sin(angle)
@@ -244,20 +259,22 @@ class Satellite(SpaceBody):
         self.vx = self.planet.vx - math.sin(self.angle) * v
         self.vy = self.planet.vy + math.cos(self.angle) * v
 
-    def step(self, dt, planet_old_pos):
+    def step(self, dt):
         """
         Шаг движения спутника, разбитый на мелкие подшаги.
 
         Спутник летает по маленькому радиусу вокруг ДВИЖУЩЕЙСЯ планеты, поэтому:
           • шаг dt дробится на SATELLITE_SUBSTEPS мелких подшагов,
           • внутри кадра положение планеты берётся линейной интерполяцией
-            между её старым (planet_old_pos) и новым положением.
-        Так пара «планета + спутник» не растаскивается.
+            между её положением на начало кадра (planet.prev_x/prev_y, которое
+            планета запомнила в своём step) и новым положением.
+        Так пара «планета + спутник» не растаскивается. Сигнатура step(dt)
+        совпадает с Planet.step — тела двигаются единообразно (полиморфизм).
         """
         planet = self.planet
         star = planet.star
-        px0, py0 = planet_old_pos              # где планета была в начале кадра
-        px1, py1 = planet.x, planet.y          # где она оказалась в конце кадра
+        px0, py0 = planet.prev_x, planet.prev_y  # где планета была в начале кадра
+        px1, py1 = planet.x, planet.y            # где она оказалась в конце кадра
 
         sub_dt = dt / SATELLITE_SUBSTEPS
         for k in range(SATELLITE_SUBSTEPS):

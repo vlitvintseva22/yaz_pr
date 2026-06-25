@@ -27,7 +27,7 @@ import os
 
 import pygame
 
-from solar_vis import set_window_size, draw_orbits, draw_legend, get_font
+from solar_vis import Viewport, draw_legend, get_font
 from solar_model import build_default_system
 from solar_input import load_system, save_system
 
@@ -124,7 +124,7 @@ class SolarApp:
         info = pygame.display.Info()
         self.canvas_w = max(640, min(1500, info.current_w - SCREEN_MARGIN_X))
         self.canvas_h = max(480, min(950, info.current_h - SCREEN_MARGIN_Y))
-        set_window_size(self.canvas_w, self.canvas_h)
+        self.view = Viewport(self.canvas_w, self.canvas_h)   # камера: физ. → экран
 
         self.screen = pygame.display.set_mode((self.canvas_w, self.canvas_h + BAR_H))
         pygame.display.set_caption("Солнечная система — 4 звезды (pygame)")
@@ -196,9 +196,9 @@ class SolarApp:
 
     def _advance(self):
         for _ in range(self._steps_this_frame()):
-            self.sim.step(self.dt)               # исчезнувшие тела просто
-            for planet in self.sim.planets:      # выпадают из списков —
-                planet.record_trail()            # в immediate-mode стирать нечего
+            self.sim.step(self.dt)                 # исчезнувшие тела просто
+            for planet in self.sim.planets:        # выпадают из списков —
+                planet.record_trail(self.view)     # в immediate-mode стирать нечего
 
     # ── Отрисовка кадра ────────────────────────────────────────────
     def _render(self):
@@ -206,16 +206,17 @@ class SolarApp:
         s.fill(BG_COLOR)
 
         if self.show_orbits:
-            draw_orbits(s, self.sim.stars)
+            for star in self.sim.stars:
+                star.render_orbits(s, self.view)
         if self.show_trails:
             for planet in self.sim.planets:
                 planet.render_trail(s)
         for star in self.sim.stars:
-            star.render(s)
+            star.render(s, self.view)
         for planet in self.sim.planets:
-            planet.render(s)
+            planet.render(s, self.view)
         for sat in self.sim.satellites:
-            sat.render(s)
+            sat.render(s, self.view)
 
         draw_legend(s, self._legend)
         self._render_hint()
