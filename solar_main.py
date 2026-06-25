@@ -8,15 +8,6 @@
   Звезда 1: 10 планет        Звезда 2: 15 планет (+спутники)
   Звезда 3: 20 планет        Звезда 4: 25 планет (+спутники)
 
-Орбиты разных звёзд пересекаются. По умолчанию планеты НЕ сталкиваются
-(interactions=False — проходят сквозь точки пересечения орбит). В режиме
-«Взаимодействие: вкл» планеты сталкиваются, сливаются и падают на звёзды
-(звезда при этом растёт). Вся физика — в solar_model / solar_objects.
-
-Это pygame-версия: окно перерисовывается каждый кадр (immediate-mode),
-а не двигает дескрипторы фигур, как было в tkinter. Тела рисуют себя
-сами методом render(); этот модуль отвечает за окно, цикл и управление.
-
 Управление:
   • кнопки внизу (мышью) и горячие клавиши:
   • SPACE — старт/пауза   O — орбиты   T — след   I — взаимодействие
@@ -36,14 +27,7 @@ SOLAR_FILE = "solar_system.txt"
 
 
 def resource_path(name):
-    """
-    Путь к ВСТРОЕННОМУ в сборку файлу.
-
-    PyInstaller (--onefile) распаковывает вшитые данные во временную папку и
-    кладёт её путь в sys._MEIPASS. Если запущен обычный .py — берём папку
-    рядом со скриптом. Так зашитые в exe .txt-конфиги находятся и из exe,
-    и при обычном запуске.
-    """
+    
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, name)
 
@@ -64,12 +48,11 @@ LABEL_COLOR = (170, 170, 170)  # подписи на панели
 
 
 class Button:
-    """Прямоугольная кнопка с динамической подписью и действием по клику."""
 
     def __init__(self, rect, label_fn, action):
         self.rect = pygame.Rect(rect)
-        self.label_fn = label_fn      # функция → текущий текст кнопки
-        self.action = action          # функция, вызываемая по клику
+        self.label_fn = label_fn      
+        self.action = action          
 
     def draw(self, surface, font, mouse_pos):
         hovered = self.rect.collidepoint(mouse_pos)
@@ -81,14 +64,13 @@ class Button:
 
 
 class Slider:
-    """Горизонтальный ползунок: тянется/кликается мышью, значение — целое."""
 
     def __init__(self, rect, vmin, vmax, get_value, set_value):
         self.rect = pygame.Rect(rect)
         self.vmin = vmin
         self.vmax = vmax
-        self.get_value = get_value      # функция → текущее значение
-        self.set_value = set_value      # функция(value) → записать значение
+        self.get_value = get_value      
+        self.set_value = set_value      
         self.dragging = False
 
     def _value_to_x(self, value):
@@ -101,8 +83,8 @@ class Slider:
         return round(self.vmin + frac * (self.vmax - self.vmin))
 
     def handle_event(self, event):
-        """Возвращает True, если событие «съедено» ползунком."""
-        grab = self.rect.inflate(16, 18)        # зона захвата чуть шире дорожки
+        
+        grab = self.rect.inflate(16, 18)        
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if grab.collidepoint(event.pos):
                 self.dragging = True
@@ -124,21 +106,21 @@ class Slider:
 
 
 class SolarApp:
-    """Окно, цикл анимации и управление над одной Simulation."""
+    
 
     def __init__(self, sim):
         self.sim = sim
-        self.running_sim = False       # идёт ли интегрирование
+        self.running_sim = False       
         self.show_trails = True
         self.show_orbits = True
-        self.dt = 1.0                  # шаг по времени за один шаг физики
-        self.speed = 50                # 0..100 — сколько шагов физики за кадр
+        self.dt = 1.0                  
+        self.speed = 50                
 
         pygame.init()
         info = pygame.display.Info()
         self.canvas_w = max(640, min(1500, info.current_w - SCREEN_MARGIN_X))
         self.canvas_h = max(480, min(950, info.current_h - SCREEN_MARGIN_Y))
-        self.view = Viewport(self.canvas_w, self.canvas_h)   # камера: физ. → экран
+        self.view = Viewport(self.canvas_w, self.canvas_h)   
 
         self.screen = pygame.display.set_mode((self.canvas_w, self.canvas_h + BAR_H))
         pygame.display.set_caption("Солнечная система — 4 звезды (pygame)")
@@ -146,15 +128,13 @@ class SolarApp:
         self.font = get_font(14)
         self.small = get_font(12)
 
-        # Крупно вписываем систему в холст (центр холста = точка (0, 0)).
         self.sim.fit_to_screen(self.canvas_w // 2, self.canvas_h // 2)
 
         self._build_controls()
         self._legend = self._legend_entries()
 
-    # ── Подготовка ─────────────────────────────────────────────────
     def _legend_entries(self):
-        """Для каждой звезды — (подпись, цвет её планет, число планет)."""
+        """Для каждой звезды — подпись, цвет её планет, число планет."""
         entries = []
         for star in self.sim.stars:
             own = [p for p in self.sim.planets if p.star is star]
@@ -180,7 +160,7 @@ class SolarApp:
                    self.toggle_interactions),
         ]
 
-        # Ползунок скорости: подпись «Скорость» слева, дорожка, значение справа.
+      
         self._speed_label_x = 644
         self._speed_value_x = 644 + 70 + 180 + 10
         slider_rect = (644 + 70, self.canvas_h + BAR_H // 2 - 3, 180, 6)
@@ -190,7 +170,7 @@ class SolarApp:
             set_value=lambda v: setattr(self, "speed", v),
         )
 
-    # ── Действия кнопок/клавиш ─────────────────────────────────────
+    #  Действия кнопок/клавиш
     def toggle_run(self):
         self.running_sim = not self.running_sim
 
@@ -203,18 +183,16 @@ class SolarApp:
     def toggle_interactions(self):
         self.sim.interactions = not self.sim.interactions
 
-    # ── Шаг симуляции ──────────────────────────────────────────────
     def _steps_this_frame(self):
-        """Сколько шагов физики выполнить за кадр (зависит от «скорости»)."""
-        return max(1, round(self.speed / 8))     # 1..~13
+        
+        return max(1, round(self.speed / 8))     
 
     def _advance(self):
         for _ in range(self._steps_this_frame()):
-            self.sim.step(self.dt)                 # исчезнувшие тела просто
-            for planet in self.sim.planets:        # выпадают из списков —
-                planet.record_trail(self.view)     # в immediate-mode стирать нечего
+            self.sim.step(self.dt)                 
+            for planet in self.sim.planets:        
+                planet.record_trail(self.view)     
 
-    # ── Отрисовка кадра ────────────────────────────────────────────
     def _render(self):
         s = self.screen
         s.fill(BG_COLOR)
@@ -266,7 +244,7 @@ class SolarApp:
         s.blit(text, (self.canvas_w - text.get_width() - 12,
                       self.canvas_h + (BAR_H - text.get_height()) // 2))
 
-    # ── Главный цикл ───────────────────────────────────────────────
+    #  Главный цикл 
     def _handle_event(self, event):
         """Возвращает False, если пора выходить."""
         if event.type == pygame.QUIT:
@@ -297,7 +275,7 @@ class SolarApp:
                         btn.action()
                         break
         elif event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
-            self.slider.handle_event(event)             # перетаскивание/отпускание
+            self.slider.handle_event(event)             
         return True
 
     def run(self):
@@ -316,20 +294,20 @@ class SolarApp:
 
 def main():
     if os.path.exists(SOLAR_FILE):
-        # 1) Пользовательская конфигурация рядом с exe (приоритет, её можно править).
+        
         print(f"[main] Загружаю конфигурацию из '{SOLAR_FILE}'")
         sim = load_system(SOLAR_FILE)
     else:
         seed = resource_path(SOLAR_FILE)
         if os.path.exists(seed):
-            # 2) Встроенная в exe конфигурация — используем как заготовку.
+            
             print(f"[main] Беру встроенную конфигурацию '{seed}'")
             sim = load_system(seed)
         else:
-            # 3) Совсем нет файла — генерируем систему по умолчанию.
+            
             print("[main] Конфигурация не найдена — генерирую систему по умолчанию")
             sim = build_default_system()
-        # Пишем рабочую копию рядом с exe, чтобы её можно было править/сохранять.
+      
         save_system(SOLAR_FILE, sim)
         print(f"[main] Рабочая копия сохранена в '{SOLAR_FILE}'")
 
